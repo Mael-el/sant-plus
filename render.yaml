@@ -3,7 +3,7 @@ services:
     name: post-sant-benin
     env: node
     plan: free
-    buildCommand: npm run build
+    buildCommand: npm ci && npm run build
     startCommand: npm start
     envVars:
       - key: NODE_ENV
