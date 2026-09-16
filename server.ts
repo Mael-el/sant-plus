@@ -679,16 +679,14 @@ app.post("/api/auth/login", async (req, res) => {
     });
   }
 
-  // Vérification 2FA pour les comptes Administrateurs ou avec 2FA activé
+  // 2FA désactivé temporairement pour le développement
+  /*
   if (user.two_factor_enabled || user.role === "admin") {
     if (!otp) {
-      // Émettre le code OTP 2FA
       const code = Math.floor(100000 + Math.random() * 900000).toString();
       const expiresAt = Date.now() + 5 * 60 * 1000;
       otpStore.set(user.id, { code, expiresAt, attempts: 0 });
-
       console.log(`[2FA-AUTH] Code OTP pour ${user.email || user.phone} : ${code}`);
-
       return res.json({
         success: true,
         requires2Fa: true,
@@ -699,17 +697,14 @@ app.post("/api/auth/login", async (req, res) => {
       const record = otpStore.get(user.id);
       const cleanOtp = String(otp).trim();
       const valid = record && record.code === cleanOtp && Date.now() <= record.expiresAt;
-
-      // Tolérance dev code universel si configuré
       const isDevBypass = process.env.NODE_ENV !== "production" && cleanOtp === "123456";
-
       if (!valid && !isDevBypass) {
         return res.status(400).json({ success: false, error: "Code 2FA invalide ou expiré." });
       }
-
       otpStore.delete(user.id);
     }
   }
+  */
 
   // Réinitialisation des tentatives et mise à jour last_login
   const loginDate = new Date().toISOString();
