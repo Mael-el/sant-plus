@@ -2,7 +2,7 @@ services:
   - type: web
     name: post-sant-benin
     env: node
-    plan: starter
+    plan: free
     buildCommand: npm run build
     startCommand: npm start
     envVars:
@@ -14,7 +14,69 @@ services:
         generateValue: true
       - key: JWT_REFRESH_SECRET
         generateValue: true
+      - key: ASIN_AUDIT_SECRET
+        generateValue: true
       - key: DATABASE_URL
         value: "data/sante_production.sqlite"
-    healthCheckPath: /api/auth/me
+      - key: FCM_PROJECT_ID
+        value: "sante-plus-benin"
+      - key: TWILIO_ACCOUNT_SID
+        value: ""
+      - key: TWILIO_AUTH_TOKEN
+        value: ""
+      - key: TWILIO_PHONE_NUMBER
+        value: ""
+      - key: SENDGRID_API_KEY
+        value: ""
+      - key: SENDGRID_FROM_EMAIL
+        value: "contact@santeplus.bj"
+      - key: FCM_CLIENT_EMAIL
+        value: ""
+      - key: FCM_PRIVATE_KEY
+        value: ""
+      - key: MTN_API_URL
+        value: "https://sandbox.momodeveloper.mtn.com"
+      - key: MTN_COLLECTION_SUBSCRIPTION_KEY
+        value: ""
+      - key: MTN_API_USER
+        value: ""
+      - key: MTN_API_KEY
+        value: ""
+      - key: MTN_TARGET_ENVIRONMENT
+        value: "sandbox"
+      - key: MTN_WEBHOOK_SECRET
+        value: ""
+      - key: MOOV_API_URL
+        value: "https://api-checkout.cinetpay.com/v2/payment"
+      - key: MOOV_API_KEY
+        value: ""
+      - key: MOOV_SITE_ID
+        value: ""
+      - key: MOOV_SECRET_KEY
+        value: ""
+      - key: LNBITS_URL
+        value: "https://legend.lnbits.com"
+      - key: LNBITS_API_KEY
+        value: ""
+      - key: LNBITS_INVOICE_KEY
+        value: ""
+      - key: BREEZ_API_KEY
+        value: ""
+      - key: BREEZ_WEBHOOK_SECRET
+        value: ""
+      - key: PINATA_API_KEY
+        value: ""
+      - key: PINATA_SECRET_API_KEY
+        value: ""
+      - key: IPFS_GATEWAY
+        value: "https://gateway.pinata.cloud/ipfs/"
+      - key: BITCOIN_NETWORK
+        value: "mainnet"
+      - key: BITCOIN_EXPLORER_URL
+        value: "https://blockstream.info/api"
+      - key: GEMINI_API_KEY
+        value: ""
+      - key: OPENAI_API_KEY
+        value: ""
+    healthCheckPath: /api/health
     autoDeploy: true

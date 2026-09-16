@@ -7,11 +7,19 @@ import bcrypt from "bcryptjs";
 import { REAL_BENIN_HOSPITALS, REAL_BENIN_PHARMACIES } from "./beninHealthData.ts";
 
 // Emplacement du fichier de base de données en production
-const DB_DIR = process.env.DB_DIR || path.join(process.cwd(), "data");
+const DB_URL = process.env.DATABASE_URL;
+let DB_PATH: string;
+if (DB_URL && (DB_URL.startsWith("sqlite://") || DB_URL.startsWith("file:"))) {
+  DB_PATH = DB_URL.replace(/^sqlite:\/\/|^file:/, "");
+} else if (DB_URL && !DB_URL.includes("postgresql://")) {
+  DB_PATH = DB_URL;
+} else {
+  DB_PATH = path.join(process.cwd(), "data", "sante_production.sqlite");
+}
+const DB_DIR = path.dirname(DB_PATH);
 if (!fs.existsSync(DB_DIR)) {
   fs.mkdirSync(DB_DIR, { recursive: true });
 }
-const DB_PATH = path.join(DB_DIR, "sante_production.sqlite");
 
 // Connexion unique avec pool / WAL mode haute performance
 export const db = new DatabaseSync(DB_PATH);

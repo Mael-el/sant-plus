@@ -26,3 +26,5 @@ dist/
 *.sqlite-shm
 data/
 skills-lock.json
+netlify.toml
+vercel.json

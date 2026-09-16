@@ -3,6 +3,7 @@ import path from "path";
 import crypto from "crypto";
 import compression from "compression";
 import cookieParser from "cookie-parser";
+import cors from "cors";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { createServer as createViteServer } from "vite";
@@ -25,6 +26,7 @@ const REFRESH_SECRET = process.env.REFRESH_SECRET || "sante-plus-benin-refresh-s
 
 // Middlewares fondamentaux de production
 app.use(compression());
+app.use(cors());
 app.use(cookieParser());
 app.use(express.json({ limit: "2mb" }));
 
