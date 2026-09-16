@@ -4,11 +4,12 @@ import crypto from "crypto";
 import compression from "compression";
 import cookieParser from "cookie-parser";
 import cors from "cors";
+import cors from "cors";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
-import { db, initDatabase, logAudit } from "./server/db";
+import { db, initDatabase, logAudit, closeDatabase } from "./server/db";
 import { webhookRouter } from "./server/routes/webhooks.ts";
 import { PaymentService } from "./server/services/paymentService.ts";
 import { NotificationService } from "./server/services/notificationService.ts";
@@ -17,7 +18,7 @@ import { IpfsService } from "./server/services/ipfsService.ts";
 import { AiClinicalService } from "./server/services/aiService.ts";
 
 // Initialisation de la base de données réelle
-initDatabase();
+// initDatabase() called inside startServer()
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
@@ -494,14 +495,14 @@ app.post("/api/auth/register-patient", async (req, res) => {
 
   // Vérification de l'unicité
   if (normalizedPhone) {
-    const existingPhone = db.prepare("SELECT id FROM users WHERE phone = ?").get(normalizedPhone);
+    const existingPhone = await db.prepare("SELECT id FROM users WHERE phone = ?").get(normalizedPhone);
     if (existingPhone) {
       return res.status(409).json({ success: false, error: "Ce numéro de téléphone est déjà associé à un compte." });
     }
   }
 
   if (normalizedEmail) {
-    const existingEmail = db.prepare("SELECT id FROM users WHERE email = ?").get(normalizedEmail);
+    const existingEmail = await db.prepare("SELECT id FROM users WHERE email = ?").get(normalizedEmail);
     if (existingEmail) {
       return res.status(409).json({ success: false, error: "Cette adresse email est déjà associée à un compte." });
     }
@@ -517,16 +518,16 @@ app.post("/api/auth/register-patient", async (req, res) => {
     const qrCodeHash = crypto.createHash("sha256").update(`SANTE-BJ-${cleanNpi}-${Date.now()}`).digest("hex");
 
     // Transaction atomique
-    db.exec("BEGIN IMMEDIATE;");
+    await db.exec("BEGIN");
     try {
-      db.prepare(`
+      await db.prepare(`
         INSERT INTO users (
           id, email, phone, password_hash, role, is_active, is_verified,
           two_factor_enabled, last_login, created_at, updated_at
         ) VALUES (?, ?, ?, ?, 'patient', 1, 1, 0, ?, ?, ?)
       `).run(userId, normalizedEmail, normalizedPhone, passwordHash, now, now, now);
 
-      db.prepare(`
+      await db.prepare(`
         INSERT INTO patients (
           id, user_id, first_name, last_name, date_of_birth, gender,
           npi, blood_type, allergies, qr_code_hash, created_at
@@ -545,13 +546,13 @@ app.post("/api/auth/register-patient", async (req, res) => {
         now
       );
 
-      db.exec("COMMIT;");
+      await db.exec("COMMIT");
     } catch (txErr) {
-      db.exec("ROLLBACK;");
+      await db.exec("ROLLBACK");
       throw txErr;
     }
 
-    logAudit(userId, "REGISTER_PATIENT", `Inscription réussie pour ${firstName} ${lastName}`, clientIp);
+    await logAudit(userId, "REGISTER_PATIENT", `Inscription réussie pour ${firstName} ${lastName}`, clientIp);
 
     // Génération des jetons JWT
     const accessToken = jwt.sign(
@@ -624,13 +625,13 @@ app.post("/api/auth/login", async (req, res) => {
   // Détermination email vs téléphone
   let user: any = null;
   if (cleanIdent.includes("@")) {
-    user = db.prepare("SELECT * FROM users WHERE email = ?").get(cleanIdent.toLowerCase());
+    user = await db.prepare("SELECT * FROM users WHERE email = ?").get(cleanIdent.toLowerCase());
   } else {
     const { normalized } = validateBeninPhone(cleanIdent);
     if (normalized) {
-      user = db.prepare("SELECT * FROM users WHERE phone = ?").get(normalized);
+      user = await db.prepare("SELECT * FROM users WHERE phone = ?").get(normalized);
     } else {
-      user = db.prepare("SELECT * FROM users WHERE phone = ?").get(cleanIdent.replace(/\D/g, ""));
+      user = await db.prepare("SELECT * FROM users WHERE phone = ?").get(cleanIdent.replace(/\D/g, ""));
     }
   }
 
@@ -657,13 +658,13 @@ app.post("/api/auth/login", async (req, res) => {
       lockTimestamp = new Date(Date.now() + 15 * 60 * 1000).toISOString(); // 15 min de verrouillage
     }
 
-    db.prepare(`
+    await db.prepare(`
       UPDATE users
       SET failed_login_attempts = ?, locked_until = ?
       WHERE id = ?
     `).run(attempts, lockTimestamp, user.id);
 
-    logAudit(user.id, "LOGIN_FAILED", `Échec mot de passe (${attempts}/5)`, clientIp);
+    await logAudit(user.id, "LOGIN_FAILED", `Échec mot de passe (${attempts}/5)`, clientIp);
 
     if (attempts >= 5) {
       return res.status(423).json({
@@ -712,13 +713,13 @@ app.post("/api/auth/login", async (req, res) => {
 
   // Réinitialisation des tentatives et mise à jour last_login
   const loginDate = new Date().toISOString();
-  db.prepare(`
+  await db.prepare(`
     UPDATE users
     SET failed_login_attempts = 0, locked_until = NULL, last_login = ?
     WHERE id = ?
   `).run(loginDate, user.id);
 
-  logAudit(user.id, "LOGIN_SUCCESS", `Connexion réussie (${user.role})`, clientIp);
+  await logAudit(user.id, "LOGIN_SUCCESS", `Connexion réussie (${user.role})`, clientIp);
 
   // Génération des tokens JWT
   const accessToken = jwt.sign(
@@ -748,11 +749,11 @@ app.post("/api/auth/login", async (req, res) => {
   // Récupérer le profil associé selon le rôle
   let profileData: any = null;
   if (user.role === "patient") {
-    profileData = db.prepare("SELECT * FROM patients WHERE user_id = ?").get(user.id);
+    profileData = await db.prepare("SELECT * FROM patients WHERE user_id = ?").get(user.id);
   } else if (user.role === "doctor") {
-    profileData = db.prepare("SELECT * FROM doctors WHERE user_id = ?").get(user.id);
+    profileData = await db.prepare("SELECT * FROM doctors WHERE user_id = ?").get(user.id);
   } else if (user.role === "hospital") {
-    profileData = db.prepare("SELECT * FROM hospitals WHERE user_id = ?").get(user.id);
+    profileData = await db.prepare("SELECT * FROM hospitals WHERE user_id = ?").get(user.id);
   }
 
   return res.json({
@@ -776,21 +777,21 @@ app.post("/api/auth/logout", (req, res) => {
 });
 
 // 4. Session Courante
-app.get("/api/auth/me", authenticateToken, (req: AuthenticatedRequest, res) => {
+app.get("/api/auth/me", authenticateToken, async (req: AuthenticatedRequest, res) => {
   if (!req.user) return res.status(401).json({ success: false });
 
-  const user: any = db.prepare("SELECT id, email, phone, role, created_at FROM users WHERE id = ?").get(req.user.id);
+  const user: any = await db.prepare("SELECT id, email, phone, role, created_at FROM users WHERE id = ?").get(req.user.id);
   if (!user) {
     return res.status(404).json({ success: false, error: "Utilisateur non trouvé." });
   }
 
   let profile: any = null;
   if (user.role === "patient") {
-    profile = db.prepare("SELECT * FROM patients WHERE user_id = ?").get(user.id);
+    profile = await db.prepare("SELECT * FROM patients WHERE user_id = ?").get(user.id);
   } else if (user.role === "doctor") {
-    profile = db.prepare("SELECT * FROM doctors WHERE user_id = ?").get(user.id);
+    profile = await db.prepare("SELECT * FROM doctors WHERE user_id = ?").get(user.id);
   } else if (user.role === "hospital") {
-    profile = db.prepare("SELECT * FROM hospitals WHERE user_id = ?").get(user.id);
+    profile = await db.prepare("SELECT * FROM hospitals WHERE user_id = ?").get(user.id);
   }
 
   return res.json({ success: true, user, profile });
@@ -804,11 +805,11 @@ app.post("/api/auth/forgot-password/request", async (req, res) => {
 
   let user: any = null;
   if (cleanIdent.includes("@")) {
-    user = db.prepare("SELECT id, email, phone FROM users WHERE email = ?").get(cleanIdent.toLowerCase());
+    user = await db.prepare("SELECT id, email, phone FROM users WHERE email = ?").get(cleanIdent.toLowerCase());
   } else {
     const { normalized } = validateBeninPhone(cleanIdent);
     const searchVal = normalized || cleanIdent.replace(/\D/g, "");
-    user = db.prepare("SELECT id, email, phone FROM users WHERE phone = ?").get(searchVal);
+    user = await db.prepare("SELECT id, email, phone FROM users WHERE phone = ?").get(searchVal);
   }
 
   if (!user) {
@@ -824,12 +825,12 @@ app.post("/api/auth/forgot-password/request", async (req, res) => {
   const resetId = crypto.randomUUID();
   const now = new Date().toISOString();
 
-  db.prepare(`
+  await db.prepare(`
     INSERT INTO password_resets (id, user_id, code, expires_at, used, created_at)
     VALUES (?, ?, ?, ?, 0, ?)
   `).run(resetId, user.id, code, expiresAt, now);
 
-  logAudit(user.id, "PASSWORD_RESET_REQUESTED", "Demande de réinitialisation de mot de passe", clientIp);
+  await logAudit(user.id, "PASSWORD_RESET_REQUESTED", "Demande de réinitialisation de mot de passe", clientIp);
 
   console.log(`[PASSWORD-RESET] Code pour ${user.email || user.phone}: ${code}`);
 
@@ -855,18 +856,18 @@ app.post("/api/auth/forgot-password/reset", async (req, res) => {
 
   let user: any = null;
   if (cleanIdent.includes("@")) {
-    user = db.prepare("SELECT id FROM users WHERE email = ?").get(cleanIdent.toLowerCase());
+    user = await db.prepare("SELECT id FROM users WHERE email = ?").get(cleanIdent.toLowerCase());
   } else {
     const { normalized } = validateBeninPhone(cleanIdent);
     const searchVal = normalized || cleanIdent.replace(/\D/g, "");
-    user = db.prepare("SELECT id FROM users WHERE phone = ?").get(searchVal);
+    user = await db.prepare("SELECT id FROM users WHERE phone = ?").get(searchVal);
   }
 
   if (!user) {
     return res.status(400).json({ success: false, error: "Code invalide ou expiré." });
   }
 
-  const resetRecord: any = db.prepare(`
+  const resetRecord: any = await db.prepare(`
     SELECT id, expires_at, used FROM password_resets
     WHERE user_id = ? AND code = ? AND used = 0
     ORDER BY created_at DESC LIMIT 1
@@ -879,21 +880,21 @@ app.post("/api/auth/forgot-password/reset", async (req, res) => {
   const passwordHash = await bcrypt.hash(newPassword, 12);
   const now = new Date().toISOString();
 
-  db.exec("BEGIN IMMEDIATE;");
+  await db.exec("BEGIN");
   try {
-    db.prepare("UPDATE users SET password_hash = ?, failed_login_attempts = 0, locked_until = NULL, updated_at = ? WHERE id = ?").run(
+    await db.prepare("UPDATE users SET password_hash = ?, failed_login_attempts = 0, locked_until = NULL, updated_at = ? WHERE id = ?").run(
       passwordHash,
       now,
       user.id
     );
-    db.prepare("UPDATE password_resets SET used = 1 WHERE id = ?").run(resetRecord.id);
-    db.exec("COMMIT;");
+    await db.prepare("UPDATE password_resets SET used = 1 WHERE id = ?").run(resetRecord.id);
+    await db.exec("COMMIT");
   } catch (err) {
-    db.exec("ROLLBACK;");
+    await db.exec("ROLLBACK");
     throw err;
   }
 
-  logAudit(user.id, "PASSWORD_RESET_SUCCESS", "Mot de passe réinitialisé avec succès", clientIp);
+  await logAudit(user.id, "PASSWORD_RESET_SUCCESS", "Mot de passe réinitialisé avec succès", clientIp);
 
   return res.json({
     success: true,
@@ -919,7 +920,7 @@ app.post("/api/auth/change-password", authenticateToken, async (req: Authenticat
     return res.status(400).json({ success: false, error: pwdVal.message });
   }
 
-  const user: any = db.prepare("SELECT id, password_hash FROM users WHERE id = ?").get(req.user.id);
+  const user: any = await db.prepare("SELECT id, password_hash FROM users WHERE id = ?").get(req.user.id);
   if (!user) {
     return res.status(404).json({ success: false, error: "Utilisateur non trouvé." });
   }
@@ -932,8 +933,8 @@ app.post("/api/auth/change-password", authenticateToken, async (req: Authenticat
   const newHash = await bcrypt.hash(newPassword, 12);
   const now = new Date().toISOString();
 
-  db.prepare("UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?").run(newHash, now, user.id);
-  logAudit(user.id, "PASSWORD_CHANGED", "Changement de mot de passe réussi", clientIp);
+  await db.prepare("UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?").run(newHash, now, user.id);
+  await logAudit(user.id, "PASSWORD_CHANGED", "Changement de mot de passe réussi", clientIp);
 
   return res.json({ success: true, message: "Mot de passe mis à jour avec succès." });
 });
@@ -943,7 +944,7 @@ app.post("/api/auth/change-password", authenticateToken, async (req: Authenticat
 // =====================================================================
 
 // 8. Inscription sur demande (Médecin ou Hôpital)
-app.post("/api/requests", (req, res) => {
+app.post("/api/requests", async (req, res) => {
   const { name = "", email = "", phone = "", function: roleFunction = "", type = "doctor" } = req.body;
   const clientIp = (req.headers["x-forwarded-for"] as string)?.split(",")[0] || req.socket.remoteAddress || "127.0.0.1";
 
@@ -963,12 +964,12 @@ app.post("/api/requests", (req, res) => {
   const now = new Date().toISOString();
 
   try {
-    db.prepare(`
+    await db.prepare(`
       INSERT INTO requests (id, name, email, phone, function, type, status, created_at)
       VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)
     `).run(id, name.trim(), email.trim().toLowerCase(), phone.trim(), roleFunction.trim(), reqType, now);
 
-    logAudit(null, "PROFESSIONAL_REQUEST_CREATED", `Demande reçue pour ${name} (${reqType})`, clientIp);
+    await logAudit(null, "PROFESSIONAL_REQUEST_CREATED", `Demande reçue pour ${name} (${reqType})`, clientIp);
 
     return res.status(201).json({
       success: true,
@@ -981,7 +982,7 @@ app.post("/api/requests", (req, res) => {
 });
 
 // 9. Liste des demandes avec pagination (20 éléments par page) pour Admin
-app.get("/api/requests", authenticateToken, (req: AuthenticatedRequest, res) => {
+app.get("/api/requests", authenticateToken, async (req: AuthenticatedRequest, res) => {
   if (req.user?.role !== "admin") {
     return res.status(403).json({ success: false, error: "Accès réservé à l'administration." });
   }
@@ -990,10 +991,10 @@ app.get("/api/requests", authenticateToken, (req: AuthenticatedRequest, res) => 
   const limit = Math.max(1, Math.min(100, parseInt(req.query.limit as string) || 20));
   const offset = (page - 1) * limit;
 
-  const countResult: any = db.prepare("SELECT COUNT(*) as total FROM requests").get();
+  const countResult: any = await db.prepare("SELECT COUNT(*) as total FROM requests").get();
   const total = countResult?.total || 0;
 
-  const items = db.prepare(`
+  const items = await db.prepare(`
     SELECT * FROM requests
     ORDER BY created_at DESC
     LIMIT ? OFFSET ?
@@ -1018,7 +1019,7 @@ app.post("/api/requests/:id/approve", authenticateToken, async (req: Authenticat
   }
 
   const { id } = req.params;
-  const requestItem: any = db.prepare("SELECT * FROM requests WHERE id = ?").get(id);
+  const requestItem: any = await db.prepare("SELECT * FROM requests WHERE id = ?").get(id);
 
   if (!requestItem) {
     return res.status(404).json({ success: false, error: "Demande non trouvée." });
@@ -1030,10 +1031,10 @@ app.post("/api/requests/:id/approve", authenticateToken, async (req: Authenticat
 
   // Vérification de l'unicité : un compte existe-t-il déjà pour cet email ou ce téléphone ?
   const existingByEmail = requestItem.email
-    ? db.prepare("SELECT id FROM users WHERE email = ?").get(String(requestItem.email).trim().toLowerCase())
+    ? await db.prepare("SELECT id FROM users WHERE email = ?").get(String(requestItem.email).trim().toLowerCase())
     : null;
   const existingByPhone = requestItem.phone
-    ? db.prepare("SELECT id FROM users WHERE phone = ?").get(String(requestItem.phone).trim())
+    ? await db.prepare("SELECT id FROM users WHERE phone = ?").get(String(requestItem.phone).trim())
     : null;
 
   if (existingByEmail || existingByPhone) {
@@ -1049,10 +1050,10 @@ app.post("/api/requests/:id/approve", authenticateToken, async (req: Authenticat
     const passwordHash = await bcrypt.hash(tempPassword, 12);
     const now = new Date().toISOString();
 
-    db.exec("BEGIN IMMEDIATE;");
+    await db.exec("BEGIN");
     try {
       // Créer le compte utilisateur
-      db.prepare(`
+      await db.prepare(`
         INSERT INTO users (
           id, email, phone, password_hash, role, is_active, is_verified,
           two_factor_enabled, created_at, updated_at
@@ -1062,7 +1063,7 @@ app.post("/api/requests/:id/approve", authenticateToken, async (req: Authenticat
       if (requestItem.type === "doctor") {
         const doctorId = crypto.randomUUID();
         const licenseNumber = `ONMB-BJ-${Date.now().toString().slice(-6)}`;
-        db.prepare(`
+        await db.prepare(`
           INSERT INTO doctors (
             id, user_id, first_name, last_name, specialty, npi, license_number, created_at
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -1078,7 +1079,7 @@ app.post("/api/requests/:id/approve", authenticateToken, async (req: Authenticat
         );
       } else {
         const hospitalId = crypto.randomUUID();
-        db.prepare(`
+        await db.prepare(`
           INSERT INTO hospitals (
             id, user_id, name, address, city, type, phone, email, created_at
           ) VALUES (?, ?, ?, ?, ?, 'clinic', ?, ?, ?)
@@ -1095,14 +1096,14 @@ app.post("/api/requests/:id/approve", authenticateToken, async (req: Authenticat
       }
 
       // Marquer la demande approuvée
-      db.prepare("UPDATE requests SET status = 'approved' WHERE id = ?").run(id);
-      db.exec("COMMIT;");
+      await db.prepare("UPDATE requests SET status = 'approved' WHERE id = ?").run(id);
+      await db.exec("COMMIT");
     } catch (err) {
-      db.exec("ROLLBACK;");
+      await db.exec("ROLLBACK");
       throw err;
     }
 
-    logAudit(req.user.id, "REQUEST_APPROVED", `Demande ${id} approuvée pour ${requestItem.name}`);
+    await logAudit(req.user.id, "REQUEST_APPROVED", `Demande ${id} approuvée pour ${requestItem.name}`);
 
     return res.json({
       success: true,
@@ -1119,19 +1120,19 @@ app.post("/api/requests/:id/approve", authenticateToken, async (req: Authenticat
 });
 
 // 11. Rejet d'une demande par l'équipe SANTÉ+
-app.post("/api/requests/:id/reject", authenticateToken, (req: AuthenticatedRequest, res) => {
+app.post("/api/requests/:id/reject", authenticateToken, async (req: AuthenticatedRequest, res) => {
   if (req.user?.role !== "admin") {
     return res.status(403).json({ success: false, error: "Accès réservé à l'administration." });
   }
 
   const { id } = req.params;
-  db.prepare("UPDATE requests SET status = 'rejected' WHERE id = ?").run(id);
-  logAudit(req.user.id, "REQUEST_REJECTED", `Demande ${id} rejetée`);
+  await db.prepare("UPDATE requests SET status = 'rejected' WHERE id = ?").run(id);
+  await logAudit(req.user.id, "REQUEST_REJECTED", `Demande ${id} rejetée`);
   return res.json({ success: true, message: "Demande marquée comme rejetée." });
 });
 
 // 12. Liste des utilisateurs avec pagination (20/page) pour Admin
-app.get("/api/admin/users", authenticateToken, (req: AuthenticatedRequest, res) => {
+app.get("/api/admin/users", authenticateToken, async (req: AuthenticatedRequest, res) => {
   if (req.user?.role !== "admin") {
     return res.status(403).json({ success: false, error: "Accès réservé à l'administration." });
   }
@@ -1140,10 +1141,10 @@ app.get("/api/admin/users", authenticateToken, (req: AuthenticatedRequest, res) 
   const limit = Math.max(1, Math.min(100, parseInt(req.query.limit as string) || 20));
   const offset = (page - 1) * limit;
 
-  const countResult: any = db.prepare("SELECT COUNT(*) as total FROM users").get();
+  const countResult: any = await db.prepare("SELECT COUNT(*) as total FROM users").get();
   const total = countResult?.total || 0;
 
-  const users = db.prepare(`
+  const users = await db.prepare(`
     SELECT id, email, phone, role, is_active, is_verified, two_factor_enabled, last_login, created_at
     FROM users
     ORDER BY created_at DESC
@@ -1163,7 +1164,7 @@ app.get("/api/admin/users", authenticateToken, (req: AuthenticatedRequest, res) 
 });
 
 // 13. Journaux d'audit avec pagination (20/page) pour Admin
-app.get("/api/admin/audit-logs", authenticateToken, (req: AuthenticatedRequest, res) => {
+app.get("/api/admin/audit-logs", authenticateToken, async (req: AuthenticatedRequest, res) => {
   if (req.user?.role !== "admin") {
     return res.status(403).json({ success: false, error: "Accès réservé à l'administration." });
   }
@@ -1172,10 +1173,10 @@ app.get("/api/admin/audit-logs", authenticateToken, (req: AuthenticatedRequest, 
   const limit = Math.max(1, Math.min(100, parseInt(req.query.limit as string) || 20));
   const offset = (page - 1) * limit;
 
-  const countResult: any = db.prepare("SELECT COUNT(*) as total FROM audit_logs").get();
+  const countResult: any = await db.prepare("SELECT COUNT(*) as total FROM audit_logs").get();
   const total = countResult?.total || 0;
 
-  const logs = db.prepare(`
+  const logs = await db.prepare(`
     SELECT * FROM audit_logs
     ORDER BY timestamp DESC
     LIMIT ? OFFSET ?
@@ -1194,16 +1195,16 @@ app.get("/api/admin/audit-logs", authenticateToken, (req: AuthenticatedRequest, 
 });
 
 // 14. Statistiques globales pour Admin (basées sur données réelles)
-app.get("/api/admin/stats", authenticateToken, (req: AuthenticatedRequest, res) => {
+app.get("/api/admin/stats", authenticateToken, async (req: AuthenticatedRequest, res) => {
   if (req.user?.role !== "admin") {
     return res.status(403).json({ success: false, error: "Accès réservé à l'administration." });
   }
 
-  const usersCount: any = db.prepare("SELECT COUNT(*) as count FROM users").get();
-  const patientsCount: any = db.prepare("SELECT COUNT(*) as count FROM patients").get();
-  const doctorsCount: any = db.prepare("SELECT COUNT(*) as count FROM doctors").get();
-  const hospitalsCount: any = db.prepare("SELECT COUNT(*) as count FROM hospitals").get();
-  const requestsCount: any = db.prepare("SELECT COUNT(*) as count FROM requests WHERE status = 'pending'").get();
+  const usersCount: any = await db.prepare("SELECT COUNT(*) as count FROM users").get();
+  const patientsCount: any = await db.prepare("SELECT COUNT(*) as count FROM patients").get();
+  const doctorsCount: any = await db.prepare("SELECT COUNT(*) as count FROM doctors").get();
+  const hospitalsCount: any = await db.prepare("SELECT COUNT(*) as count FROM hospitals").get();
+  const requestsCount: any = await db.prepare("SELECT COUNT(*) as count FROM requests WHERE status = 'pending'").get();
 
   return res.json({
     success: true,
@@ -1237,7 +1238,7 @@ function calculateDistanceKm(lat1: number, lon1: number, lat2: number, lon2: num
 }
 
 // 15. Répertoire des hôpitaux du Bénin avec filtres et recherche
-app.get("/api/hospitals", (req, res) => {
+app.get("/api/hospitals", async (req, res) => {
   try {
     const { city, department, type, emergency, blood_bank, search, lat, lng } = req.query;
 
@@ -1274,7 +1275,7 @@ app.get("/api/hospitals", (req, res) => {
     }
 
     query += " ORDER BY name ASC";
-    const rawHospitals: any[] = db.prepare(query).all(...params);
+    const rawHospitals: any[] = await db.prepare(query).all(...params);
 
     const userLat = lat ? parseFloat(String(lat)) : null;
     const userLng = lng ? parseFloat(String(lng)) : null;
@@ -1317,7 +1318,7 @@ app.get("/api/hospitals", (req, res) => {
 });
 
 // 16. Répertoire des pharmacies du Bénin (avec filtres de garde)
-app.get("/api/pharmacies", (req, res) => {
+app.get("/api/pharmacies", async (req, res) => {
   try {
     const { city, department, on_duty, search, lat, lng } = req.query;
 
@@ -1345,7 +1346,7 @@ app.get("/api/pharmacies", (req, res) => {
     }
 
     query += " ORDER BY is_on_duty DESC, name ASC";
-    const rawPharmacies: any[] = db.prepare(query).all(...params);
+    const rawPharmacies: any[] = await db.prepare(query).all(...params);
 
     const userLat = lat ? parseFloat(String(lat)) : null;
     const userLng = lng ? parseFloat(String(lng)) : null;
@@ -1379,14 +1380,14 @@ app.get("/api/pharmacies", (req, res) => {
 });
 
 // 17. Synthèse géoregistre national de santé
-app.get("/api/facilities/summary", (_req, res) => {
+app.get("/api/facilities/summary", async (_req, res) => {
   try {
-    const totalHospitals: any = db.prepare("SELECT COUNT(*) as c FROM hospitals").get();
-    const totalPharmacies: any = db.prepare("SELECT COUNT(*) as c FROM pharmacies").get();
-    const dutyPharmacies: any = db.prepare("SELECT COUNT(*) as c FROM pharmacies WHERE is_on_duty = 1").get();
-    const emergencyHospitals: any = db.prepare("SELECT COUNT(*) as c FROM hospitals WHERE has_emergency = 1").get();
-    const bloodBankHospitals: any = db.prepare("SELECT COUNT(*) as c FROM hospitals WHERE has_blood_bank = 1").get();
-    const totalBeds: any = db.prepare("SELECT SUM(capacity) as s FROM hospitals").get();
+    const totalHospitals: any = await db.prepare("SELECT COUNT(*) as c FROM hospitals").get();
+    const totalPharmacies: any = await db.prepare("SELECT COUNT(*) as c FROM pharmacies").get();
+    const dutyPharmacies: any = await db.prepare("SELECT COUNT(*) as c FROM pharmacies WHERE is_on_duty = 1").get();
+    const emergencyHospitals: any = await db.prepare("SELECT COUNT(*) as c FROM hospitals WHERE has_emergency = 1").get();
+    const bloodBankHospitals: any = await db.prepare("SELECT COUNT(*) as c FROM hospitals WHERE has_blood_bank = 1").get();
+    const totalBeds: any = await db.prepare("SELECT SUM(capacity) as s FROM hospitals").get();
 
     return res.json({
       success: true,
@@ -1705,7 +1706,7 @@ app.post("/api/appointments", authenticateToken, async (req: AuthenticatedReques
   const now = new Date().toISOString();
   const status = paid ? "confirmed" : "pending";
 
-  db.prepare(`
+  await db.prepare(`
     INSERT INTO appointments (
       id, patient_id, patient_name, patient_phone, doctor_id, doctor_name,
       hospital_id, hospital_name, motif, profession, appointment_date,
@@ -1734,9 +1735,9 @@ app.post("/api/appointments", authenticateToken, async (req: AuthenticatedReques
     now
   );
 
-  const doctorUser = db.prepare("SELECT user_id FROM doctors WHERE id = ?").get(doctorId) as { user_id?: string } | undefined;
+  const doctorUser = await db.prepare("SELECT user_id FROM doctors WHERE id = ?").get(doctorId) as { user_id?: string } | undefined;
   if (doctorUser?.user_id) {
-    db.prepare(`
+    await db.prepare(`
       INSERT INTO notifications (id, user_id, title, message, is_read, related_type, related_id, created_at)
       VALUES (?, ?, ?, ?, 0, ?, ?, ?)
     `).run(
@@ -1750,7 +1751,7 @@ app.post("/api/appointments", authenticateToken, async (req: AuthenticatedReques
     );
   }
 
-  logAudit(req.user.id, "APPOINTMENT_CREATED", `Rendez-vous créé pour ${patientName} (${appointmentId})`, req.ip || "127.0.0.1");
+  await logAudit(req.user.id, "APPOINTMENT_CREATED", `Rendez-vous créé pour ${patientName} (${appointmentId})`, req.ip || "127.0.0.1");
 
   return res.status(201).json({
     success: true,
@@ -1777,12 +1778,12 @@ app.post("/api/appointments", authenticateToken, async (req: AuthenticatedReques
   });
 });
 
-app.get("/api/doctor/agenda", authenticateToken, (req: AuthenticatedRequest, res) => {
+app.get("/api/doctor/agenda", authenticateToken, async (req: AuthenticatedRequest, res) => {
   if (req.user?.role !== "doctor") {
     return res.status(403).json({ success: false, error: "Accès réservé aux médecins." });
   }
 
-  const doctor = db.prepare("SELECT id, first_name, last_name, specialty FROM doctors WHERE user_id = ?").get(req.user.id) as {
+  const doctor = await db.prepare("SELECT id, first_name, last_name, specialty FROM doctors WHERE user_id = ?").get(req.user.id) as {
     id: string;
     first_name: string;
     last_name: string;
@@ -1793,7 +1794,7 @@ app.get("/api/doctor/agenda", authenticateToken, (req: AuthenticatedRequest, res
     return res.status(404).json({ success: false, error: "Profil médecin introuvable." });
   }
 
-  const rows = db.prepare(`
+  const rows = await db.prepare(`
     SELECT * FROM appointments
     WHERE doctor_id = ?
     ORDER BY appointment_date ASC, appointment_time ASC
@@ -1823,12 +1824,12 @@ app.get("/api/doctor/agenda", authenticateToken, (req: AuthenticatedRequest, res
   });
 });
 
-app.get("/api/patient/dossier", authenticateToken, (req: AuthenticatedRequest, res) => {
+app.get("/api/patient/dossier", authenticateToken, async (req: AuthenticatedRequest, res) => {
   if (req.user?.role !== "patient") {
     return res.status(403).json({ success: false, error: "Accès réservé au patient." });
   }
 
-  const patient = db.prepare("SELECT id, first_name, last_name, npi, blood_type, allergies FROM patients WHERE user_id = ?").get(req.user.id) as {
+  const patient = await db.prepare("SELECT id, first_name, last_name, npi, blood_type, allergies FROM patients WHERE user_id = ?").get(req.user.id) as {
     id: string;
     first_name: string;
     last_name: string;
@@ -1841,11 +1842,11 @@ app.get("/api/patient/dossier", authenticateToken, (req: AuthenticatedRequest, r
     return res.status(404).json({ success: false, error: "Dossier patient introuvable." });
   }
 
-  const appointments = db.prepare(`
+  const appointments = await db.prepare(`
     SELECT * FROM appointments WHERE patient_id = ? ORDER BY created_at DESC
   `).all(patient.id) as any[];
 
-  const consultations = db.prepare(`
+  const consultations = await db.prepare(`
     SELECT * FROM consultation_records WHERE patient_id = ? ORDER BY created_at DESC
   `).all(patient.id) as any[];
 
@@ -1864,7 +1865,7 @@ app.get("/api/patient/dossier", authenticateToken, (req: AuthenticatedRequest, r
 });
 
 // Recherche globale de patients (médecin)
-app.get("/api/patients/search", authenticateToken, (req: AuthenticatedRequest, res) => {
+app.get("/api/patients/search", authenticateToken, async (req: AuthenticatedRequest, res) => {
   if (req.user?.role !== "doctor" && req.user?.role !== "hospital" && req.user?.role !== "admin") {
     return res.status(403).json({ success: false, error: "Accès réservé aux professionnels de santé." });
   }
@@ -1879,16 +1880,16 @@ app.get("/api/patients/search", authenticateToken, (req: AuthenticatedRequest, r
 
   switch (field as string) {
     case "npi":
-      query = db.prepare("SELECT id, user_id, first_name, last_name, npi, blood_type, allergies, qr_code_hash, qr_link, created_at FROM patients WHERE npi LIKE ?").all(`%${searchTerm}%`);
+      query = await db.prepare("SELECT id, user_id, first_name, last_name, npi, blood_type, allergies, qr_code_hash, qr_link, created_at FROM patients WHERE npi LIKE ?").all(`%${searchTerm}%`);
       break;
     case "phone":
-      query = db.prepare("SELECT p.id, p.user_id, p.first_name, p.last_name, p.npi, p.blood_type, p.allergies, p.qr_code_hash, p.qr_link, p.created_at, u.phone FROM patients p JOIN users u ON p.user_id = u.id WHERE u.phone LIKE ?").all(`%${searchTerm}%`);
+      query = await db.prepare("SELECT p.id, p.user_id, p.first_name, p.last_name, p.npi, p.blood_type, p.allergies, p.qr_code_hash, p.qr_link, p.created_at, u.phone FROM patients p JOIN users u ON p.user_id = u.id WHERE u.phone LIKE ?").all(`%${searchTerm}%`);
       break;
     case "name":
-      query = db.prepare("SELECT id, user_id, first_name, last_name, npi, blood_type, allergies, qr_code_hash, qr_link, created_at, NULL as phone FROM patients WHERE first_name LIKE ? OR last_name LIKE ?").all(`%${searchTerm}%`, `%${searchTerm}%`);
+      query = await db.prepare("SELECT id, user_id, first_name, last_name, npi, blood_type, allergies, qr_code_hash, qr_link, created_at, NULL as phone FROM patients WHERE first_name LIKE ? OR last_name LIKE ?").all(`%${searchTerm}%`, `%${searchTerm}%`);
       break;
     case "qr":
-      query = db.prepare("SELECT id, user_id, first_name, last_name, npi, blood_type, allergies, qr_code_hash, qr_link, created_at, NULL as phone FROM patients WHERE qr_link LIKE ? OR qr_code_hash LIKE ?").all(`%${searchTerm}%`, `%${searchTerm}%`);
+      query = await db.prepare("SELECT id, user_id, first_name, last_name, npi, blood_type, allergies, qr_code_hash, qr_link, created_at, NULL as phone FROM patients WHERE qr_link LIKE ? OR qr_code_hash LIKE ?").all(`%${searchTerm}%`, `%${searchTerm}%`);
       break;
     default:
       return res.status(400).json({ success: false, error: "Champ de recherche invalide. Utilisez: npi, phone, name, qr." });
@@ -1910,21 +1911,21 @@ app.get("/api/patients/search", authenticateToken, (req: AuthenticatedRequest, r
   });
 });
 
-app.post("/api/appointments/:id/arrive", authenticateToken, (req: AuthenticatedRequest, res) => {
+app.post("/api/appointments/:id/arrive", authenticateToken, async (req: AuthenticatedRequest, res) => {
   if (req.user?.role !== "doctor" && req.user?.role !== "hospital") {
     return res.status(403).json({ success: false, error: "Action non autorisée." });
   }
 
-  const row = db.prepare("SELECT * FROM appointments WHERE id = ?").get(req.params.id) as any;
+  const row = await db.prepare("SELECT * FROM appointments WHERE id = ?").get(req.params.id) as any;
   if (!row) {
     return res.status(404).json({ success: false, error: "Rendez-vous introuvable." });
   }
 
-  db.prepare("UPDATE appointments SET status = 'arrived', updated_at = ? WHERE id = ?").run(new Date().toISOString(), req.params.id);
+  await db.prepare("UPDATE appointments SET status = 'arrived', updated_at = ? WHERE id = ?").run(new Date().toISOString(), req.params.id);
 
-  const patientUser = db.prepare("SELECT user_id FROM patients WHERE id = ?").get(row.patient_id) as { user_id?: string } | undefined;
+  const patientUser = await db.prepare("SELECT user_id FROM patients WHERE id = ?").get(row.patient_id) as { user_id?: string } | undefined;
   if (patientUser?.user_id) {
-    db.prepare(`
+    await db.prepare(`
       INSERT INTO notifications (id, user_id, title, message, is_read, related_type, related_id, created_at)
       VALUES (?, ?, ?, ?, 0, ?, ?, ?)
     `).run(
@@ -1941,7 +1942,7 @@ app.post("/api/appointments/:id/arrive", authenticateToken, (req: AuthenticatedR
   return res.json({ success: true, message: "Statut du rendez-vous mis à jour." });
 });
 
-app.post("/api/appointments/:id/consultation", authenticateToken, (req: AuthenticatedRequest, res) => {
+app.post("/api/appointments/:id/consultation", authenticateToken, async (req: AuthenticatedRequest, res) => {
   if (req.user?.role !== "doctor") {
     return res.status(403).json({ success: false, error: "Seul le médecin peut créer une consultation." });
   }
@@ -1951,12 +1952,12 @@ app.post("/api/appointments/:id/consultation", authenticateToken, (req: Authenti
     return res.status(400).json({ success: false, error: "Motif, diagnostic et prescription sont obligatoires." });
   }
 
-  const appointment = db.prepare("SELECT * FROM appointments WHERE id = ?").get(req.params.id) as any;
+  const appointment = await db.prepare("SELECT * FROM appointments WHERE id = ?").get(req.params.id) as any;
   if (!appointment) {
     return res.status(404).json({ success: false, error: "Rendez-vous introuvable." });
   }
 
-  const doctor = db.prepare("SELECT id FROM doctors WHERE user_id = ?").get(req.user.id) as { id: string } | undefined;
+  const doctor = await db.prepare("SELECT id FROM doctors WHERE user_id = ?").get(req.user.id) as { id: string } | undefined;
   if (!doctor || appointment.doctor_id !== doctor.id) {
     return res.status(403).json({ success: false, error: "Ce rendez-vous ne correspond pas à ce médecin." });
   }
@@ -1965,7 +1966,7 @@ app.post("/api/appointments/:id/consultation", authenticateToken, (req: Authenti
   const consultationId = crypto.randomUUID();
   const blockchainHash = crypto.createHash("sha256").update(`${consultationId}:${motif}:${diagnosis}:${now}`).digest("hex");
 
-  db.prepare(`
+  await db.prepare(`
     INSERT INTO consultation_records (
       id, appointment_id, patient_id, doctor_id, hospital_id, motif,
       diagnosis, prescription, notes, vitals, status, blockchain_hash, created_at, updated_at
@@ -1986,11 +1987,11 @@ app.post("/api/appointments/:id/consultation", authenticateToken, (req: Authenti
     now
   );
 
-  db.prepare("UPDATE appointments SET status = 'completed', updated_at = ? WHERE id = ?").run(now, appointment.id);
+  await db.prepare("UPDATE appointments SET status = 'completed', updated_at = ? WHERE id = ?").run(now, appointment.id);
 
-  const patientUser = db.prepare("SELECT user_id FROM patients WHERE id = ?").get(appointment.patient_id) as { user_id?: string } | undefined;
+  const patientUser = await db.prepare("SELECT user_id FROM patients WHERE id = ?").get(appointment.patient_id) as { user_id?: string } | undefined;
   if (patientUser?.user_id) {
-    db.prepare(`
+    await db.prepare(`
       INSERT INTO notifications (id, user_id, title, message, is_read, related_type, related_id, created_at)
       VALUES (?, ?, ?, ?, 0, ?, ?, ?)
     `).run(
@@ -2004,7 +2005,7 @@ app.post("/api/appointments/:id/consultation", authenticateToken, (req: Authenti
     );
   }
 
-  logAudit(req.user.id, "CONSULTATION_VALIDATED", `Consultation validée (${consultationId}) pour le rendez-vous ${appointment.id}`, req.ip || "127.0.0.1");
+  await logAudit(req.user.id, "CONSULTATION_VALIDATED", `Consultation validée (${consultationId}) pour le rendez-vous ${appointment.id}`, req.ip || "127.0.0.1");
 
   return res.status(201).json({
     success: true,
@@ -2142,6 +2143,7 @@ app.post("/api/prescriptions/verify", (req, res) => {
 });
 
 async function startServer() {
+  await initDatabase();
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
       server: { middlewareMode: true },
@@ -2161,4 +2163,11 @@ async function startServer() {
   });
 }
 
-startServer();
+;(async () => {
+  const httpServer = await startServer();
+
+  process.on("SIGTERM", async () => {
+    await closeDatabase();
+    httpServer.close();
+  });
+})();

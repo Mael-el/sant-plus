@@ -302,9 +302,9 @@ export class PaymentService {
     const amountSats = Math.round(params.amountXof / 0.45);
 
     // 1. Création ou mise à jour de la facture
-    const existingInvoice = db.prepare("SELECT id FROM invoices WHERE id = ?").get(invoiceUuid);
+    const existingInvoice = await db.prepare("SELECT id FROM invoices WHERE id = ?").get(invoiceUuid);
     if (!existingInvoice) {
-      db.prepare(`
+      await db.prepare(`
         INSERT INTO invoices (
           id, patient_id, items, total_xof, status, payment_method, created_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -343,7 +343,7 @@ export class PaymentService {
     }
 
     // 3. Enregistrement strict dans la table transactions
-    db.prepare(`
+    await db.prepare(`
       INSERT INTO transactions (
         id, patient_id, invoice_id, amount_xof, amount_sats,
         method, status, transaction_id, payment_hash, provider_response, created_at
@@ -385,7 +385,7 @@ export class PaymentService {
     invoiceId?: string;
     completedAt?: string;
   }> {
-    const tx = db.prepare("SELECT * FROM transactions WHERE transaction_id = ?").get(transactionId) as any;
+    const tx = await db.prepare("SELECT * FROM transactions WHERE transaction_id = ?").get(transactionId) as any;
     if (!tx) {
       return { status: "failed" };
     }
@@ -409,14 +409,14 @@ export class PaymentService {
 
     if (updatedStatus === "completed") {
       const now = new Date().toISOString();
-      db.prepare(`
+      await db.prepare(`
         UPDATE transactions
         SET status = 'completed', completed_at = ?
         WHERE transaction_id = ?
       `).run(now, transactionId);
 
       if (tx.invoice_id) {
-        db.prepare(`
+        await db.prepare(`
           UPDATE invoices
           SET status = 'paid', paid_at = ?
           WHERE id = ?
@@ -432,11 +432,11 @@ export class PaymentService {
   // -------------------------------------------------------------------
   // TRAITEMENT SÉCURISÉ DES WEBHOOKS
   // -------------------------------------------------------------------
-  public static processWebhookPayment(
+  public static async processWebhookPayment(
     transactionId: string,
     providerStatus: string,
     rawPayload: any
-  ): boolean {
+  ): Promise<boolean> {
     const now = new Date().toISOString();
     const isCompleted = ["SUCCESSFUL", "SUCCESS", "PAID", "COMPLETED", "00"].includes(
       providerStatus.toUpperCase()
@@ -444,23 +444,23 @@ export class PaymentService {
 
     const newStatus = isCompleted ? "completed" : "failed";
 
-    const result = db.prepare(`
+    const result = await db.prepare(`
       UPDATE transactions
       SET status = ?, completed_at = ?, provider_response = ?
       WHERE transaction_id = ?
     `).run(newStatus, isCompleted ? now : null, JSON.stringify(rawPayload), transactionId);
 
     if (result.changes > 0 && isCompleted) {
-      const tx = db.prepare("SELECT invoice_id FROM transactions WHERE transaction_id = ?").get(transactionId) as any;
+      const tx = await db.prepare("SELECT invoice_id FROM transactions WHERE transaction_id = ?").get(transactionId) as any;
       if (tx && tx.invoice_id) {
-        db.prepare(`
+        await db.prepare(`
           UPDATE invoices
           SET status = 'paid', paid_at = ?
           WHERE id = ?
         `).run(now, tx.invoice_id);
 
         // Si la facture est liée à un rendez-vous, valider aussi le paiement du rendez-vous
-        db.prepare(`
+        await db.prepare(`
           UPDATE appointments
           SET paid = 1, status = 'confirmed', updated_at = ?
           WHERE id = (SELECT appointment_id FROM invoices WHERE id = ?)

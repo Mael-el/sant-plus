@@ -219,17 +219,17 @@ export class NotificationService {
   // -------------------------------------------------------------------
   // 4. CRÉATION EN BASE DE DONNÉES
   // -------------------------------------------------------------------
-  public static saveInternalNotification(
+  public static async saveInternalNotification(
     userId: string,
     title: string,
     message: string,
     relatedType?: string,
     relatedId?: string
-  ): void {
+  ): Promise<void> {
     const id = crypto.randomUUID();
     const now = new Date().toISOString();
 
-    db.prepare(`
+    await db.prepare(`
       INSERT INTO notifications (id, user_id, title, message, is_read, related_type, related_id, created_at)
       VALUES (?, ?, ?, ?, 0, ?, ?, ?)
     `).run(id, userId, title, message, relatedType || null, relatedId || null, now);
