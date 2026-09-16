@@ -1,23 +1,46 @@
+import { DatabaseSync } from "node:sqlite";
 import { Pool } from "pg";
+import path from "node:path";
+import fs from "node:fs";
 import crypto from "node:crypto";
 import bcrypt from "bcryptjs";
 import { REAL_BENIN_HOSPITALS, REAL_BENIN_PHARMACIES } from "./beninHealthData.ts";
 
-// PostgreSQL connection setup
-const connectionString = process.env.DATABASE_URL || "postgresql://sante_user:sante_pass@localhost:5432/santeplus_benin";
-const pool = new Pool({ connectionString, max: 20 });
-pool.on("error", (err) => console.error("[PG-POOL] Unexpected error:", err));
+// =====================================================================
+// CHOIX DU MOTEUR DE BASE DE DONNÉES
+// =====================================================================
+const DB_URL = process.env.DATABASE_URL;
+const isPostgres = DB_URL && DB_URL.startsWith("postgresql://");
+
+let sqliteDb: DatabaseSync | null = null;
+let pgPool: Pool | null = null;
+
+if (isPostgres) {
+  pgPool = new Pool({ connectionString: DB_URL, max: 20 });
+  pgPool.on("error", (err) => console.error("[PG-POOL] Error:", err));
+} else {
+  const dbPath = DB_URL || path.join(process.cwd(), "data", "sante_production.sqlite");
+  const dbDir = path.dirname(dbPath);
+  if (!fs.existsSync(dbDir)) {
+    fs.mkdirSync(dbDir, { recursive: true });
+  }
+  sqliteDb = new DatabaseSync(dbPath);
+  sqliteDb.exec(`
+    PRAGMA journal_mode = WAL;
+    PRAGMA synchronous = NORMAL;
+    PRAGMA busy_timeout = 5000;
+    PRAGMA foreign_keys = ON;
+  `);
+}
 
 // =====================================================================
-// WRAPPER SQLITE-COMPATIBLE POUR PG
+// WRAPPER SQLITE-COMPATIBLE (PG ou SQLite)
 // =====================================================================
 type Params = (string | number | Date | Buffer | null | boolean)[];
-interface QueryResultRows<T = any> extends Array<T> {}
-interface PgStatement {
+interface Statement {
   get: (...params: Params) => Promise<any>;
   run: (...params: Params) => Promise<any>;
   all: (...params: Params) => Promise<any[]>;
-  allWithCount: (...params: Params) => Promise<{ rows: any[]; count: number }>;
 }
 
 function convertPlaceholders(sql: string): string {
@@ -25,42 +48,56 @@ function convertPlaceholders(sql: string): string {
   return sql.replace(/\?/g, () => `$${idx++}`);
 }
 
-function stmt(sql: string): PgStatement {
+function stmt(sql: string): Statement {
   const query = convertPlaceholders(sql);
   return {
     get: async (...params: Params) => {
-      const res = await pool.query(query, params);
-      return res.rows[0] || null;
+      if (isPostgres && pgPool) {
+        const res = await pgPool.query(query, params);
+        return res.rows[0] || null;
+      } else if (sqliteDb) {
+        const res = sqliteDb.prepare(query).get(...params);
+        return res;
+      }
+      return null;
     },
     run: async (...params: Params) => {
-      await pool.query(query, params);
-      return { changes: 1 };
+      if (isPostgres && pgPool) {
+        await pgPool.query(query, params);
+        return { changes: 1 };
+      } else if (sqliteDb) {
+        sqliteDb.prepare(query).run(...params);
+        return { changes: 1 };
+      }
+      return { changes: 0 };
     },
     all: async (...params: Params) => {
-      const res = await pool.query(query, params);
-      return res.rows;
-    },
-    allWithCount: async (...params: Params) => {
-      const res = await pool.query(query, params);
-      return { rows: res.rows, count: res.rowCount || res.rows.length };
+      if (isPostgres && pgPool) {
+        const res = await pgPool.query(query, params);
+        return res.rows;
+      } else if (sqliteDb) {
+        const res = sqliteDb.prepare(query).all(...params);
+        return res;
+      }
+      return [];
     },
   };
 }
 
 export const db = {
   prepare: stmt,
-  async exec(sql: string): Promise<void> {
-    const client = await pool.connect();
-    try {
-      await client.query(sql);
-    } finally {
-      client.release();
+  exec: async (sql: string): Promise<void> => {
+    if (isPostgres && pgPool) {
+      const client = await pgPool.connect();
+      try { await client.query(sql); } finally { client.release(); }
+    } else if (sqliteDb) {
+      sqliteDb.exec(sql);
     }
   },
 };
 
 // =====================================================================
-// STRUCTURE DE LA BASE DE DONNÉES POSTGRESQL
+// SCHEMA DE BASE DE DONNÉES
 // =====================================================================
 const SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS users (
@@ -116,8 +153,8 @@ const SCHEMA_SQL = `
     address TEXT NOT NULL,
     city TEXT NOT NULL,
     department TEXT NOT NULL,
-    latitude DOUBLE PRECISION NOT NULL,
-    longitude DOUBLE PRECISION NOT NULL,
+    latitude REAL NOT NULL,
+    longitude REAL NOT NULL,
     phone TEXT,
     email TEXT,
     specialties TEXT,
@@ -134,8 +171,8 @@ const SCHEMA_SQL = `
     address TEXT NOT NULL,
     city TEXT NOT NULL,
     department TEXT NOT NULL,
-    latitude DOUBLE PRECISION NOT NULL,
-    longitude DOUBLE PRECISION NOT NULL,
+    latitude REAL NOT NULL,
+    longitude REAL NOT NULL,
     phone TEXT,
     is_on_duty INTEGER DEFAULT 0,
     duty_start_date TEXT,
@@ -284,102 +321,123 @@ const SCHEMA_SQL = `
 `;
 
 export async function initDatabase(): Promise<void> {
-  const client = await pool.connect();
-  try {
-    await client.query(SCHEMA_SQL);
-    console.log("[DB-INIT] Schema PostgreSQL créé avec succès.");
+  await db.exec(SCHEMA_SQL);
 
-    const hospitalCount = (await client.query("SELECT COUNT(*) as count FROM hospitals")).rows[0].count;
-    if (parseInt(hospitalCount) === 0) {
-      const insertHosp = client.query.bind(client);
+  if (!isPostgres && sqliteDb) {
+    const hospitalCount = (sqliteDb.prepare("SELECT COUNT(*) as count FROM hospitals").get() as { count: number }).count;
+    if (hospitalCount === 0) {
       const now = new Date().toISOString();
+      const insertHosp = sqliteDb.prepare(`
+        INSERT INTO hospitals (id, name, type, address, city, department, latitude, longitude, phone, email, specialties, has_emergency, has_blood_bank, capacity, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
       for (const h of REAL_BENIN_HOSPITALS) {
-        await client.query(
-          `INSERT INTO hospitals (id, name, type, address, city, department, latitude, longitude, phone, email, specialties, has_emergency, has_blood_bank, capacity, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
-          [h.id, h.name, h.type, h.address, h.city, h.department, h.latitude, h.longitude, h.phone, h.email, JSON.stringify(h.specialties), h.has_emergency ? 1 : 0, h.has_blood_bank ? 1 : 0, h.capacity, now]
-        );
+        insertHosp.run(h.id, h.name, h.type, h.address, h.city, h.department, h.latitude, h.longitude, h.phone, h.email, JSON.stringify(h.specialties), h.has_emergency ? 1 : 0, h.has_blood_bank ? 1 : 0, h.capacity, now);
       }
       console.log(`[DB-SEED] ${REAL_BENIN_HOSPITALS.length} hôpitaux insérés.`);
     }
 
-    const pharmacyCount = (await client.query("SELECT COUNT(*) as count FROM pharmacies")).rows[0].count;
-    if (parseInt(pharmacyCount) === 0) {
+    const pharmacyCount = (sqliteDb.prepare("SELECT COUNT(*) as count FROM pharmacies").get() as { count: number }).count;
+    if (pharmacyCount === 0) {
       const now = new Date().toISOString();
+      const insertPharm = sqliteDb.prepare(`
+        INSERT INTO pharmacies (id, name, address, city, department, latitude, longitude, phone, is_on_duty, duty_start_date, duty_end_date, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
       for (const p of REAL_BENIN_PHARMACIES) {
-        await client.query(
-          `INSERT INTO pharmacies (id, name, address, city, department, latitude, longitude, phone, is_on_duty, duty_start_date, duty_end_date, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
-          [p.id, p.name, p.address, p.city, p.department, p.latitude, p.longitude, p.phone, p.is_on_duty ? 1 : 0, p.duty_start_date, p.duty_end_date, now]
-        );
+        insertPharm.run(p.id, p.name, p.address, p.city, p.department, p.latitude, p.longitude, p.phone, p.is_on_duty ? 1 : 0, p.duty_start_date, p.duty_end_date, now);
       }
       console.log(`[DB-SEED] ${REAL_BENIN_PHARMACIES.length} pharmacies insérées.`);
     }
 
-    const adminCheck = (await client.query("SELECT id FROM users WHERE role = 'admin' LIMIT 1")).rows;
-    if (adminCheck.length === 0) {
+    const adminCheck = sqliteDb.prepare("SELECT id FROM users WHERE role = 'admin' LIMIT 1").get();
+    if (!adminCheck) {
       const adminId = crypto.randomUUID();
       const now = new Date().toISOString();
       const defaultPassword = process.env.ADMIN_INITIAL_PASSWORD || "BeninSante2026!";
       const passwordHash = bcrypt.hashSync(defaultPassword, 12);
-      await client.query(
-        `INSERT INTO users (id, email, phone, password_hash, role, is_active, is_verified, two_factor_enabled, created_at, updated_at) VALUES ($1, $2, $3, $4, 'admin', 1, 1, 1, $5, $6)`,
-        [adminId, "admin.sante@gouv.bj", "0195000001", passwordHash, now, now]
-      );
+      sqliteDb.prepare(`
+        INSERT INTO users (id, email, phone, password_hash, role, is_active, is_verified, two_factor_enabled, created_at, updated_at) VALUES (?, ?, ?, ?, 'admin', 1, 1, 1, ?, ?)
+      `).run(adminId, "admin.sante@gouv.bj", "0195000001", passwordHash, now, now);
       console.log("[DB-SEED] Admin créé.");
     }
 
-    const doctorCheck = (await client.query("SELECT id FROM users WHERE role = 'doctor' LIMIT 1")).rows;
-    if (doctorCheck.length === 0) {
+    const doctorCheck = sqliteDb.prepare("SELECT id FROM users WHERE role = 'doctor' LIMIT 1").get();
+    if (!doctorCheck) {
       const userId = crypto.randomUUID();
       const doctorId = crypto.randomUUID();
       const now = new Date().toISOString();
       const defaultPassword = process.env.DOCTOR_INITIAL_PASSWORD || "MedecinSante2026!";
       const passwordHash = bcrypt.hashSync(defaultPassword, 12);
-      await client.query(
-        `INSERT INTO users (id, email, phone, password_hash, role, is_active, is_verified, two_factor_enabled, created_at, updated_at) VALUES ($1, $2, $3, $4, 'doctor', 1, 1, 0, $5, $6)`,
-        [userId, "medecin.sante@benin.local", "0195000002", passwordHash, now, now]
-      );
-      await client.query(
-        `INSERT INTO doctors (id, user_id, first_name, last_name, specialty, npi, hospital_id, license_number, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-        [doctorId, userId, "Dr. Marcel", "Dossou", "Médecine générale", "BEN-DR-001", null, "ONMB-BJ-DR-001", now]
-      );
+      sqliteDb.prepare(`
+        INSERT INTO users (id, email, phone, password_hash, role, is_active, is_verified, two_factor_enabled, created_at, updated_at) VALUES (?, ?, ?, ?, 'doctor', 1, 1, 0, ?, ?)
+      `).run(userId, "medecin.sante@benin.local", "0195000002", passwordHash, now, now);
+      sqliteDb.prepare(`
+        INSERT INTO doctors (id, user_id, first_name, last_name, specialty, npi, hospital_id, license_number, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(doctorId, userId, "Dr. Marcel", "Dossou", "Médecine générale", "BEN-DR-001", null, "ONMB-BJ-DR-001", now);
       console.log("[DB-SEED] Médecin créé.");
     }
 
-    const hospitalUserCheck = (await client.query("SELECT id FROM users WHERE role = 'hospital' LIMIT 1")).rows;
-    if (hospitalUserCheck.length === 0) {
+    const hospitalUserCheck = sqliteDb.prepare("SELECT id FROM users WHERE role = 'hospital' LIMIT 1").get();
+    if (!hospitalUserCheck) {
       const userId = crypto.randomUUID();
       const hospitalId = crypto.randomUUID();
       const now = new Date().toISOString();
       const defaultPassword = process.env.HOSPITAL_INITIAL_PASSWORD || "HopitalSante2026!";
       const passwordHash = bcrypt.hashSync(defaultPassword, 12);
-      await client.query(
-        `INSERT INTO users (id, email, phone, password_hash, role, is_active, is_verified, two_factor_enabled, created_at, updated_at) VALUES ($1, $2, $3, $4, 'hospital', 1, 1, 0, $5, $6)`,
-        [userId, "hopital.sante@benin.local", "0195000003", passwordHash, now, now]
-      );
-      await client.query(
-        `INSERT INTO hospitals (id, user_id, name, type, address, city, department, latitude, longitude, phone, email, specialties, has_emergency, has_blood_bank, capacity, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
-        [hospitalId, userId, "Centre Hospitalier Universitaire de Cotonou", "national", "Avenue de la Clinique, Cotonou", "Cotonou", "Littoral", 6.3703, 2.3903, "0195000003", "hopital.sante@benin.local", JSON.stringify(["Urgences", "Médecine interne", "Pédiatrie"]), 1, 1, 320, now]
-      );
+      sqliteDb.prepare(`
+        INSERT INTO users (id, email, phone, password_hash, role, is_active, is_verified, two_factor_enabled, created_at, updated_at) VALUES (?, ?, ?, ?, 'hospital', 1, 1, 0, ?, ?)
+      `).run(userId, "hopital.sante@benin.local", "0195000003", passwordHash, now, now);
+      sqliteDb.prepare(`
+        INSERT INTO hospitals (id, user_id, name, type, address, city, department, latitude, longitude, phone, email, specialties, has_emergency, has_blood_bank, capacity, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(hospitalId, userId, "Centre Hospitalier Universitaire de Cotonou", "national", "Avenue de la Clinique, Cotonou", "Cotonou", "Littoral", 6.3703, 2.3903, "0195000003", "hopital.sante@benin.local", JSON.stringify(["Urgences", "Médecine interne", "Pédiatrie"]), 1, 1, 320, now);
       console.log("[DB-SEED] Hôpital créé.");
     }
-  } finally {
-    client.release();
+  } else if (isPostgres && pgPool) {
+    // PostgreSQL seeding
+    const client = await pgPool.connect();
+    try {
+      const hospitalCount = (await client.query("SELECT COUNT(*) as count FROM hospitals")).rows[0].count;
+      if (parseInt(hospitalCount) === 0) {
+        const now = new Date().toISOString();
+        for (const h of REAL_BENIN_HOSPITALS) {
+          await client.query(`
+            INSERT INTO hospitals (id, name, type, address, city, department, latitude, longitude, phone, email, specialties, has_emergency, has_blood_bank, capacity, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+          `, [h.id, h.name, h.type, h.address, h.city, h.department, h.latitude, h.longitude, h.phone, h.email, JSON.stringify(h.specialties), h.has_emergency ? 1 : 0, h.has_blood_bank ? 1 : 0, h.capacity, now]);
+        }
+        console.log(`[DB-SEED] ${REAL_BENIN_HOSPITALS.length} hôpitaux insérés.`);
+      }
+      const adminCheck = (await client.query("SELECT id FROM users WHERE role = 'admin' LIMIT 1")).rows;
+      if (adminCheck.length === 0) {
+        const adminId = crypto.randomUUID();
+        const now = new Date().toISOString();
+        const defaultPassword = process.env.ADMIN_INITIAL_PASSWORD || "BeninSante2026!";
+        const passwordHash = bcrypt.hashSync(defaultPassword, 12);
+        await client.query(`INSERT INTO users (id, email, phone, password_hash, role, is_active, is_verified, two_factor_enabled, created_at, updated_at) VALUES ($1, $2, $3, $4, 'admin', 1, 1, 1, $5, $6)`, [adminId, "admin.sante@gouv.bj", "0195000001", passwordHash, now, now]);
+      }
+    } finally {
+      client.release();
+    }
   }
+
+  console.log("[DB-INIT] Base de données initialisée.");
 }
 
 export async function logAudit(userId: string | null, action: string, details: string, ip: string = "unknown"): Promise<void> {
   try {
     const id = crypto.randomUUID();
     const timestamp = new Date().toISOString();
-    await pool.query(
-      `INSERT INTO audit_logs (id, user_id, action, details, ip_address, timestamp) VALUES ($1, $2, $3, $4, $5, $6)`,
-      [id, userId, action, details, ip, timestamp]
-    );
+    await db.prepare(`
+      INSERT INTO audit_logs (id, user_id, action, details, ip_address, timestamp)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(id, userId, action, details, ip, timestamp);
   } catch (err) {
     console.error("Erreur log audit:", err);
   }
 }
 
 export async function closeDatabase(): Promise<void> {
-  await pool.end();
+  if (pgPool) await pgPool.end();
+  if (sqliteDb) sqliteDb.close();
 }

@@ -2,7 +2,7 @@ services:
   - type: web
     name: post-sant-benin
     env: node
-    plan: starter
+    plan: free
     buildCommand: npm run build
     startCommand: npm start
     envVars:
@@ -17,9 +17,7 @@ services:
       - key: ASIN_AUDIT_SECRET
         generateValue: true
       - key: DATABASE_URL
-        fromDatabase:
-          name: post-sant-benin-db
-          property: connectionString
+        value: "data/sante_production.sqlite"
       - key: FCM_PROJECT_ID
         value: "sante-plus-benin"
       - key: TWILIO_ACCOUNT_SID
@@ -82,7 +80,3 @@ services:
         value: ""
     healthCheckPath: /api/health
     autoDeploy: true
-
-databases:
-  - name: post-sant-benin-db
-    plan: starter
