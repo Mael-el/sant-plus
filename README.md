@@ -37,3 +37,4 @@ Plateforme de santé numérique nationale pour la République du Bénin.
 - **Frontend** : React 18, Vite, TypeScript, Tailwind CSS, Lucide Icons, Motion
 - **Backend** : Node.js, Express, @google/genai SDK (Gemini 2.5 Flash)
 - **Palette** : Charte institutionnelle "Vert & Blanc" (Vert émeraude #00A86B, Vert profond #007048, Blanc pur #FFFFFF)
+# sant-plus
