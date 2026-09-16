@@ -85,5 +85,4 @@ services:
 
 databases:
   - name: post-sant-benin-db
-    engine: POSTGRES
     plan: starter
