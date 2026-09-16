@@ -1,0 +1,6 @@
+{
+  "name": "SANTÉ+",
+  "description": "Application de santé numérique pour le Bénin : dossier médical FHIR, triage IA, géoregistre IASO et paiements Mobile Money.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

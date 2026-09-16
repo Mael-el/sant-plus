@@ -1,0 +1,51 @@
+{
+  "id": "/",
+  "name": "SANTÉ+ Bénin",
+  "short_name": "SANTÉ+",
+  "description": "Plateforme nationale de santé numérique pour la République du Bénin : carnet de santé, consultations médicales, hôpitaux, urgences et paiements sécurisés.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#F0F9F4",
+  "theme_color": "#00A86B",
+  "lang": "fr-BJ",
+  "dir": "ltr",
+  "categories": ["medical", "health", "government"],
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-maskable.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Urgences & Samu 112",
+      "short_name": "Urgences",
+      "description": "Appel d'urgence et secours immédiats",
+      "url": "/?screen=urgences",
+      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Hôpitaux du Bénin",
+      "short_name": "Hôpitaux",
+      "description": "Trouver un hôpital ou un centre de santé",
+      "url": "/?screen=hopitaux",
+      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
+    }
+  ]
+}

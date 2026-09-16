@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: post-sant-benin
+    env: node
+    plan: starter
+    buildCommand: npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "3000"
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_REFRESH_SECRET
+        generateValue: true
+      - key: DATABASE_URL
+        value: "data/sante_production.sqlite"
+    healthCheckPath: /api/auth/me
+    autoDeploy: true
