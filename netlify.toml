@@ -1,0 +1,17 @@
+[build]
+  command = "npm run build:client"
+  publish = "dist"
+
+# Redirection de l'API vers le backend hébergé sur Render
+# (Remplacez l'URL si votre service Render a un nom différent)
+[[redirects]]
+  from = "/api/*"
+  to = "https://post-sant-benin.onrender.com/api/:splat"
+  status = 200
+  force = true
+
+# Règle SPA pour l'application React
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
