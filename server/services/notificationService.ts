@@ -7,6 +7,7 @@
 // =====================================================================
 
 import crypto from "node:crypto";
+import jwt from "jsonwebtoken";
 import { db } from "../db.ts";
 
 export interface SendSmsParams {
@@ -132,10 +133,87 @@ export class NotificationService {
   // -------------------------------------------------------------------
   public static async sendPushNotification(params: SendPushParams): Promise<{ success: boolean; error?: string }> {
     const projectId = process.env.FCM_PROJECT_ID || "sante-plus-benin";
+    const clientEmail = process.env.FCM_CLIENT_EMAIL;
+    const privateKey = process.env.FCM_PRIVATE_KEY;
 
-    // Envoi via API v1 HTTP Firebase
-    console.log(`[FCM-PUSH] Notification push préparée pour ${params.fcmToken} : "${params.title}"`);
-    return { success: true };
+    if (!clientEmail || !privateKey) {
+      console.warn(`[FCM-PUSH] Clés FCM non configurées (FCM_CLIENT_EMAIL ou FCM_PRIVATE_KEY manquantes). Push simulé pour ${params.fcmToken}`);
+      return { success: true };
+    }
+
+    try {
+      const now = Math.floor(Date.now() / 1000);
+      const accessToken = await this.getFcmAccessToken(projectId, clientEmail, privateKey);
+      if (!accessToken) {
+        console.error("[FCM-PUSH] Impossible d'obtenir un access token FCM.");
+        return { success: false, error: "FCM authentication failed" };
+      }
+
+      const url = `https://fcm.googleapis.com/v1/projects/${projectId}/messages:send`;
+      const res = await fetch(url, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          token: params.fcmToken,
+          notification: {
+            title: params.title,
+            body: params.body,
+          },
+          data: params.data || {},
+        }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        console.log(`[FCM-PUSH] Notification push envoyée avec succès pour ${params.fcmToken}:`, data);
+        return { success: true };
+      }
+
+      const errorBody = await res.text();
+      console.error(`[FCM-PUSH] Erreur FCM (${res.status}):`, errorBody);
+      return { success: false, error: `FCM API error: ${res.status} ${errorBody}` };
+    } catch (err) {
+      console.error("[FCM-PUSH] Exception:", err);
+      return { success: false, error: String(err) };
+    }
+  }
+
+  private static async getFcmAccessToken(projectId: string, clientEmail: string, privateKey: string): Promise<string | null> {
+    try {
+      const now = Math.floor(Date.now() / 1000);
+      const payload = {
+        iss: clientEmail,
+        sub: clientEmail,
+        aud: "https://oauth2.googleapis.com/token",
+        iat: now,
+        exp: now + 3600,
+        scope: "https://www.googleapis.com/auth/firebase.messaging",
+      };
+
+      const signKey = privateKey.replace(/\\n/g, "\n");
+      const assertion = jwt.sign(payload, signKey, {
+        algorithm: "RS256",
+        header: { kid: clientEmail, typ: "JWT", alg: "RS256" },
+      });
+
+      const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+          assertion,
+        }).toString(),
+      });
+
+      if (!tokenRes.ok) return null;
+      const tokenData = await tokenRes.json();
+      return tokenData.access_token || null;
+    } catch {
+      return null;
+    }
   }
 
   // -------------------------------------------------------------------
