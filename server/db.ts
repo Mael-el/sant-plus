@@ -49,34 +49,36 @@ function convertPlaceholders(sql: string): string {
 }
 
 function stmt(sql: string): Statement {
-  const query = convertPlaceholders(sql);
   return {
     get: async (...params: Params) => {
       if (isPostgres && pgPool) {
+        const query = convertPlaceholders(sql);
         const res = await pgPool.query(query, params);
         return res.rows[0] || null;
       } else if (sqliteDb) {
-        const res = sqliteDb.prepare(query).get(...params);
+        const res = sqliteDb.prepare(sql).get(...params);
         return res;
       }
       return null;
     },
     run: async (...params: Params) => {
       if (isPostgres && pgPool) {
+        const query = convertPlaceholders(sql);
         await pgPool.query(query, params);
         return { changes: 1 };
       } else if (sqliteDb) {
-        sqliteDb.prepare(query).run(...params);
+        sqliteDb.prepare(sql).run(...params);
         return { changes: 1 };
       }
       return { changes: 0 };
     },
     all: async (...params: Params) => {
       if (isPostgres && pgPool) {
+        const query = convertPlaceholders(sql);
         const res = await pgPool.query(query, params);
         return res.rows;
       } else if (sqliteDb) {
-        const res = sqliteDb.prepare(query).all(...params);
+        const res = sqliteDb.prepare(sql).all(...params);
         return res;
       }
       return [];

@@ -1,40 +1,115 @@
-# SANTÉ+ Bénin
+# 🏥 SANTÉ+
 
-Plateforme de santé numérique nationale pour la République du Bénin.
+**Chaque battement compte. Chaque dossier vit. Chaque soin pulse.**
 
-## Fonctionnalités Portées
+SANTÉ+ est une plateforme révolutionnaire d'e-santé conçue pour le Bénin, intégrant la puissance de la blockchain Bitcoin et de l'intelligence artificielle pour transformer la gestion des soins de santé. Développé par l'**Équipe Winners** lors du *Bitcoin Mastermind Hackathon 2026*.
 
-1. **Portail Citoyen & Dossier Médical Partagé (FHIR R4)**
-   - Authentification NPI (Numéro Personnel d'Identification ANIP Bénin)
-   - Profil médical (groupe sanguin, électrophorèse AA/AS/SS, allergies)
-   - Consultations et ordonnances certifiées avec preuve d'intégrité Bitcoin (OP_RETURN) et visualiseur QR Code
-   - Relevé des constantes vitales (Tension artérielle, Glycémie, Température, FC, Hémoglobine)
-   - Export du dossier médical au format standardisé FHIR R4 JSON
+---
 
-2. **Triage Clinique IA & Détection des Interactions Médicamenteuses**
-   - Moteur de triage alimenté par Google Gemini avec heuristiques de repli adaptées à la zone intertropicale et aux directives du PNLP Bénin
-   - Détection des interactions médicamenteuses critiques (AINS, Coartem/CTA, Paracétamol)
+## 🚀 Vision & Objectifs
+L'objectif de SANTÉ+ est de digitaliser le parcours de soin au Bénin en offrant :
+- **Souveraineté des données** via le stockage décentralisé (IPFS).
+- **Inclusion financière** grâce aux paiements via Mobile Money et le réseau Lightning (Bitcoin).
+- **Efficacité diagnostique** grâce à l'IA et au triage intelligent.
+- **Interopérabilité** entre patients, médecins et centres de santé.
 
-3. **Géoregistre Sanitaire IASO & Carte Nationale**
-   - Référentiel des hôpitaux et centres de santé des 12 départements du Bénin
-   - Filtrage par département, lits disponibles, urgences 24h/24 et calcul d'itinéraires
+---
 
-4. **Paiements Santé Sécurisés (PI-SPI & Mobile Money)**
-   - Intégration MTN Mobile Money, Moov Money, Celtiis Cash et PI-SPI (BCEAO)
-   - Génération de quittances avec QR Code vérifiable
+## ✨ Fonctionnalités Clés
 
-5. **Banque de Sang & Urgences Transfusionnelles**
-   - Alertes de pénurie par groupe sanguin dans les hôpitaux du Bénin
-   - Fiche d'appels d'urgence (SAMU 15, Sapeurs Pompiers 118, ANTS)
+### 👤 Espace Patient (Mobile / PWA)
+- Gestion du dossier médical numérique.
+- Prise de rendez-vous en ligne.
+- Triage médical assisté par IA.
+- Paiement sécurisé des consultations (MTN, MOOV, Bitcoin).
+- Accès rapide via QR Code.
 
-6. **Espaces Professionnels & Administration DSI**
-   - Parcours de demande praticien (Ordre National des Médecins du Bénin - ONMB)
-   - Enrôlement établissement IASO
-   - Portail d'administration centrale avec contrôle d'accès, audit logs et double authentification (2FA)
+### 🩺 Espace Médecin (Desktop)
+- Gestion des consultations et prescriptions.
+- Accès instantané aux antécédents patients.
+- Suivi des patients et rappels de soins.
+- Facturation automatisée.
 
-## Architecture Technique
+### 🏥 Espace Hôpital (Desktop)
+- Administration des ressources et du personnel.
+- Gestion des flux de patients.
+- Monitoring des capacités d'accueil.
+- Coordination avec les pharmacies de garde.
 
-- **Frontend** : React 18, Vite, TypeScript, Tailwind CSS, Lucide Icons, Motion
-- **Backend** : Node.js, Express, @google/genai SDK (Gemini 2.5 Flash)
-- **Palette** : Charte institutionnelle "Vert & Blanc" (Vert émeraude #00A86B, Vert profond #007048, Blanc pur #FFFFFF)
-# sant-plus
+### ⚙️ Espace Admin (Desktop)
+- Validation des accréditations professionnelles.
+- Monitoring global du système.
+- Audit logs et sécurité.
+- Statistiques de santé publique.
+
+---
+
+## 🛠 Stack Technique
+
+### 💻 Frontend
+- **Framework :** Next.js 14 (App Router), React 18, TypeScript.
+- **Styling :** TailwindCSS, Lucide React.
+- **État :** TanStack Query, Zustand.
+- **Formulaires :** React Hook Form, Zod.
+- **Outils :** Socket.io-client, Leaflet (Cartographie), Chart.js.
+
+### ⚙️ Backend & Infrastructure
+- **Framework :** NestJS (Node.js).
+- **Bases de données :** PostgreSQL (via Prisma), MongoDB (via Mongoose), Redis.
+- **Messagerie :** RabbitMQ, Socket.io.
+- **Auth :** JWT, Bcrypt.
+- **DevOps :** Docker, Docker Compose, Render, Vercel, GitHub Actions.
+- **Monitoring :** InfluxDB, Grafana, Sentry.
+
+### ⛓️ Blockchain & IA
+- **Blockchain :** Bitcoin Core, bitcoinjs-lib, LNbits, Breez SDK.
+- **Stockage :** IPFS via Pinata.
+- **Intelligence Artificielle :** OpenAI (GPT-4), Hugging Face, FastAPI (Python).
+
+---
+
+## 💳 Systèmes de Paiement Intégrés
+SANTÉ+ supporte les méthodes de paiement les plus adaptées au marché béninois :
+- **Mobile Money :** MTN Mobile Money, MOOV Money.
+- **Lightning Network :** Breez, LNbits (pour des transactions Bitcoin instantanées et quasi gratuites).
+
+---
+
+## 🏗️ Déploiement Rapide
+
+### Backend
+1. Connecter le dépôt GitHub à **Render**.
+2. Configurer les variables d'environnement.
+3. Build : `npm install && npm run build`
+4. Start : `npm start`
+
+### Frontend
+1. Importer le projet sur **Vercel**.
+2. Configurer le répertoire racine (ex: `frontend/patient`).
+3. Ajouter les variables d'environnement.
+
+---
+
+## 👥 L'Équipe Winners
+| Membre | Rôle |
+| :--- | :--- |
+| **Bienvenu ESSEGNON** | Product Owner & Développeur Full-Stack |
+| **Adorée KPENONHOUN** | Développeuse Full-Stack |
+| **Orphet AHILIHAN** | Développeur Backend & Blockchain |
+| **Ismail AGOHOUNDJE** | Développeur Frontend & UI/UX |
+| **Prince BONGO** | Développeur Backend & IA |
+
+---
+
+## 📞 Contact & Informations
+- **Site web :** [https://santeplus.bj](https://santeplus.bj)
+- **Email :** [ismailagohoundje14@gmail.com]
+- **Téléphone :** +229 0161791967
+- **Adresse :** Cotonou, Bénin
+- **GitHub :** [https://github.com/santeplus](https://github.com/santeplus)
+
+---
+
+## ⚖️ Licence
+SANTÉ+ est un logiciel propriétaire. Tous droits réservés.
+© 2026 SANTÉ+ · Équipe Winners · Bénin · E-santé · Bitcoin
