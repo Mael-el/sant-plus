@@ -438,6 +438,6 @@ export async function logAudit(userId: string | null, action: string, details: s
 }
 
 export async function closeDatabase(): Promise<void> {
-  if (pgPool) await pgPool.end();
-  if (sqliteDb) sqliteDb.close();
+  try { if (pgPool) { await pgPool.end(); pgPool = null; } } catch {}
+  try { if (sqliteDb) { sqliteDb.close(); sqliteDb = null; } } catch {}
 }
